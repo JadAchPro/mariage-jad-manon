@@ -63,7 +63,9 @@ Merci ! Nous revenons vers vous très vite pour confirmer la réservation
 const PRIX_APPOINT = 25;
 const BASE_URL = "/mariage-jad-manon/";
 
-    // Hash FormSubmit du compte jachhab.pro@gmail.com (évite l'email en clair dans l'endpoint)
+    // Base de données des réservations (API sur le VPS) : source de vérité des disponibilités
+    const API = 'https://mariage.46-225-107-125.sslip.io/api';
+    // Hash FormSubmit du compte jachhab.pro@gmail.com : notifications e-mail (Jad + convive)
     const ENDPOINT = 'https://formsubmit.co/ajax/623ecb3e749f2ebdab8d75db83fa3347';
 
     // Grise une chambre (badge + bouton remplacé par la mention réservée)
@@ -94,8 +96,8 @@ const BASE_URL = "/mariage-jad-manon/";
       if (el) el.textContent = libres + ' chambre' + (libres > 1 ? 's' : '') + ' encore disponible' + (libres > 1 ? 's' : '') + ' sur ' + total;
     };
 
-    // Disponibilités : fichier dispo.json à la racine du site (MAJ sans rebuild)
-    fetch(BASE_URL + 'dispo.json?v=' + Date.now())
+    // Disponibilités en temps réel depuis l'API
+    fetch(API + '/dispo')
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (!d || !d.reserved) return;
@@ -112,6 +114,7 @@ const BASE_URL = "/mariage-jad-manon/";
     const totalNoteEl = document.getElementById('modal-total-note');
     const submitBtn = document.getElementById('submit-btn');
     const errorEl = document.getElementById('form-error');
+    const defaultErrorHtml = errorEl.innerHTML;
 
     let current = null;
 
@@ -127,6 +130,7 @@ const BASE_URL = "/mariage-jad-manon/";
       form.hidden = false;
       success.hidden = true;
       errorEl.hidden = true;
+      errorEl.innerHTML = defaultErrorHtml;
       submitBtn.disabled = false;
       submitBtn.textContent = 'Envoyer ma réservation';
       overlay.hidden = false;
@@ -156,6 +160,36 @@ const BASE_URL = "/mariage-jad-manon/";
 
       const data = new FormData(form);
 
+      // 1) Enregistrement en base (bloque la chambre pour tout le monde)
+      try {
+        const resa = await fetch(API + '/reserve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            room: current.id,
+            occupants: data.get('occupants'),
+            email: data.get('email_contact'),
+            telephone: data.get('telephone') || '',
+            message: data.get('message') || '',
+          }),
+        });
+        if (resa.status === 409) {
+          errorEl.innerHTML = 'Oups, cette chambre vient tout juste d\'être réservée par quelqu\'un d\'autre. Choisissez-en une autre !';
+          errorEl.hidden = false;
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Envoyer ma réservation';
+          markReserved(current.id, '');
+          return;
+        }
+        if (!resa.ok) throw new Error('HTTP ' + resa.status);
+      } catch {
+        errorEl.hidden = false;
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Envoyer ma réservation';
+        return;
+      }
+
+      // 2) Notifications e-mail (meilleur effort : la réservation est déjà enregistrée)
       const payload = {
         _subject: 'Réservation logement mariage - ' + current.nom,
         _template: 'table',
@@ -179,19 +213,17 @@ const BASE_URL = "/mariage-jad-manon/";
       };
 
       try {
-        const res = await fetch(ENDPOINT, {
+        await fetch(ENDPOINT, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
           body: JSON.stringify(payload),
         });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        form.hidden = true;
-        success.hidden = false;
-        markReserved(current.id, data.get('occupants'));
       } catch {
-        errorEl.hidden = false;
-        submitBtn.disabled = false;
-        submitBtn.textContent = 'Envoyer ma réservation';
+        // Réservation déjà en base : l'échec de la notification n'est pas bloquant.
       }
+
+      form.hidden = true;
+      success.hidden = false;
+      markReserved(current.id, data.get('occupants'));
     });
   })();</script>  <script type="module">const s=new IntersectionObserver(e=>{e.forEach(r=>{r.isIntersecting&&r.target.classList.add("visible")})},{threshold:.1});document.querySelectorAll(".reveal").forEach(e=>{s.observe(e)});</script> </body> </html> 
